@@ -3,7 +3,6 @@ package llminternal
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
@@ -147,8 +146,7 @@ func TestOutputSchemaRequestProcessor(t *testing.T) {
 
 	t.Run("NoOpWhenNativeSupportAvailable", func(t *testing.T) {
 		// Native support = Vertex AI + Gemini 2.0+
-		os.Setenv("GOOGLE_GENAI_USE_VERTEXAI", "1")
-		defer os.Unsetenv("GOOGLE_GENAI_USE_VERTEXAI")
+		t.Setenv("GOOGLE_GENAI_USE_VERTEXAI", "1")
 
 		baseAgent := utils.Must(agent.New(agent.Config{Name: "VertexGemini2Agent"}))
 		mockAgent := &mockLLMAgent{

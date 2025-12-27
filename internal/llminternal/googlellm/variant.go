@@ -29,6 +29,10 @@ const (
 	GoogleLLMVariantGeminiAPI = "GEMINI_API"
 )
 
+var (
+	geminiModelVersionRegex = regexp.MustCompile(`^gemini-(\d+(\.\d+)?)`)
+)
+
 // GetGoogleLLMVariant returns the Google LLM variant to use.
 // see https://google.github.io/adk-docs/get-started/quickstart/#set-up-the-model
 func GetGoogleLLMVariant() string {
@@ -58,8 +62,7 @@ func IsGeminiModel(model string) bool {
 func IsGemini2OrAbove(model string) bool {
 	model = extractModelName(model)
 	// extract the model version from model name - e.g. turn gemini-2.5-flash or gemini-2.5-flash-lite into 2.5
-	re := regexp.MustCompile(`^gemini-(\d+(\.\d+)?)`)
-	matches := re.FindStringSubmatch(model)
+	matches := geminiModelVersionRegex.FindStringSubmatch(model)
 	if len(matches) < 2 {
 		return false
 	}

@@ -29,6 +29,14 @@ import (
 	"google.golang.org/adk/tool"
 )
 
+const (
+	instructionForProcessor = "IMPORTANT: You have access to other tools, but you must provide " +
+		"your final response using the set_model_response tool with the " +
+		"required structured format. After using any other tools needed " +
+		"to complete the task, always call set_model_response with your " +
+		"final answer in the specified schema format."
+)
+
 // outputSchemaRequestProcessor adds the set_model_response tool to handle structured output.
 func outputSchemaRequestProcessor(ctx agent.InvocationContext, req *model.LLMRequest) error {
 	llmAgent := asLLMAgent(ctx.Agent())
@@ -49,13 +57,7 @@ func outputSchemaRequestProcessor(ctx agent.InvocationContext, req *model.LLMReq
 	}
 
 	// Add instruction about using the set_model_response tool
-	instruction := "IMPORTANT: You have access to other tools, but you must provide " +
-		"your final response using the set_model_response tool with the " +
-		"required structured format. After using any other tools needed " +
-		"to complete the task, always call set_model_response with your " +
-		"final answer in the specified schema format."
-
-	utils.AppendInstructions(req, instruction)
+	utils.AppendInstructions(req, instructionForProcessor)
 
 	return nil
 }
