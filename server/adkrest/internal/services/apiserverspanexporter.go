@@ -16,7 +16,9 @@ package services
 
 import (
 	"context"
+	"slices"
 	"strings"
+	"sync"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
@@ -26,39 +28,79 @@ import (
 // This is used for debugging individual events.
 // APIServerSpanExporter implements sdktrace.SpanExporter interface.
 type APIServerSpanExporter struct {
+	mu sync.RWMutex
+
 	traceDict map[string]map[string]string
+
+	session2TraceID map[string][]string
+	spans           []sdktrace.ReadOnlySpan
 }
 
 // NewAPIServerSpanExporter returns a APIServerSpanExporter instance
 func NewAPIServerSpanExporter() *APIServerSpanExporter {
 	return &APIServerSpanExporter{
-		traceDict: make(map[string]map[string]string),
+		traceDict:       make(map[string]map[string]string),
+		session2TraceID: make(map[string][]string),
 	}
 }
 
 // GetTraceDict returns stored trace informations
 func (s *APIServerSpanExporter) GetTraceDict() map[string]map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	return s.traceDict
 }
 
 // ExportSpans implements custom export function for sdktrace.SpanExporter.
 func (s *APIServerSpanExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.spans = append(s.spans, spans...)
+
 	for _, span := range spans {
+		spanAttributes := span.Attributes()
+		attributes := make(map[string]string)
+		for _, attribute := range spanAttributes {
+			key := string(attribute.Key)
+			attributes[key] = attribute.Value.AsString()
+		}
 		if span.Name() == "call_llm" || span.Name() == "send_data" || strings.HasPrefix(span.Name(), "execute_tool") {
-			spanAttributes := span.Attributes()
-			attributes := make(map[string]string)
-			for _, attribute := range spanAttributes {
-				key := string(attribute.Key)
-				attributes[key] = attribute.Value.AsString()
-			}
 			attributes["trace_id"] = span.SpanContext().TraceID().String()
 			attributes["span_id"] = span.SpanContext().SpanID().String()
+
 			if eventID, ok := attributes["gcp.vertex.agent.event_id"]; ok {
 				s.traceDict[eventID] = attributes
 			}
 		}
+		// collect trace ids for each session from spans so that later we can construct the whole trace.
+		if sessionID, ok := attributes["gcp.vertex.agent.session_id"]; ok && span.SpanContext().HasTraceID() {
+			traceID := span.SpanContext().TraceID().String()
+			if !slices.Contains(s.session2TraceID[sessionID], traceID) {
+				s.session2TraceID[sessionID] = append(s.session2TraceID[sessionID], traceID)
+			}
+		}
 	}
 	return nil
+}
+
+func (s *APIServerSpanExporter) ExportSpansBySession(sessionID string) []sdktrace.ReadOnlySpan {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	traceIDs := s.session2TraceID[sessionID]
+	if len(traceIDs) == 0 {
+		return nil
+	}
+
+	var filteredSpans []sdktrace.ReadOnlySpan
+	for _, span := range s.spans {
+		if slices.Contains(traceIDs, span.SpanContext().TraceID().String()) {
+			filteredSpans = append(filteredSpans, span)
+		}
+	}
+	return filteredSpans
 }
 
 // Shutdown is a function that sdktrace.SpanExporter has, should close the span exporter connections.

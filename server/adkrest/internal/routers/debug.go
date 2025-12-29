@@ -49,7 +49,7 @@ func (r *DebugAPIRouter) Routes() Routes {
 			Name:        "GetSessionTrace",
 			Methods:     []string{http.MethodGet},
 			Pattern:     "/debug/trace/session/{session_id}",
-			HandlerFunc: controllers.Unimplemented,
+			HandlerFunc: r.runtimeController.SessionTraceHandler,
 		},
 	}
 }

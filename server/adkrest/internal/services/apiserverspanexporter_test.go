@@ -126,17 +126,20 @@ func TestAPIServerSpanExporterExportSpans(t *testing.T) {
 				t.Fatalf("traceDict should have 1 item, but has %d", len(traceDict))
 			}
 
-			eventDict, ok := traceDict["event-id"]
+			spans, ok := traceDict["event-id"]
 			if !ok {
 				t.Fatalf("traceDict should contain event ID event-id")
 			}
 
-			if _, ok := eventDict["span_id"]; !ok {
-				t.Fatalf("traceDict should contain span_id")
+			if len(spans) == 0 {
+				t.Fatalf("spans should not be empty")
 			}
 
-			if _, ok := eventDict["trace_id"]; !ok {
-				t.Fatalf("traceDict should contain trace_id")
+			if spans["trace_id"] == "" {
+				t.Errorf("trace_id should be non-empty")
+			}
+			if spans["span_id"] == "" {
+				t.Errorf("span_id should be non-empty")
 			}
 		})
 	}
@@ -148,3 +151,44 @@ func TestAPIServerSpanExporterShutdown(t *testing.T) {
 		t.Errorf("Shutdown() error = %v, wantErr nil", err)
 	}
 }
+
+func TestAPIServerSpanExporterSessionTracking(t *testing.T) {
+	ctx := context.Background()
+	capturer := &capturingExporter{}
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(capturer))
+	tracer := tp.Tracer("test-tracer")
+
+	// Create spans for session-1
+	_, span1 := tracer.Start(ctx, "call_llm", trace.WithAttributes(attribute.String("gcp.vertex.agent.session_id", "session-1")))
+	span1.End()
+	_, span2 := tracer.Start(ctx, "another_span", trace.WithAttributes(attribute.String("gcp.vertex.agent.session_id", "session-1")))
+	span2.End()
+
+	// Create a span for session-2
+	_, span3 := tracer.Start(ctx, "call_llm", trace.WithAttributes(attribute.String("gcp.vertex.agent.session_id", "session-2")))
+	span3.End()
+
+	if err := tp.Shutdown(ctx); err != nil {
+		t.Fatalf("failed to shutdown tracer provider: %v", err)
+	}
+
+	exporter := NewAPIServerSpanExporter()
+	if err := exporter.ExportSpans(ctx, capturer.spans); err != nil {
+		t.Fatalf("ExportSpans() error = %v", err)
+	}
+
+	// Verify session-1 trace IDs
+	traces1 := exporter.session2TraceID["session-1"]
+	if len(traces1) != 2 {
+		t.Errorf("expected 2 trace IDs for session-1, got %d", len(traces1))
+	}
+
+	// Verify uniqueness: capture spans with same trace ID (not easily possible with tracer.Start without setup)
+	// But let's verify ExportSpansBySession
+	session1Spans := exporter.ExportSpansBySession("session-1")
+	if len(session1Spans) != 2 {
+		t.Errorf("expected 2 spans for session-1 via ExportSpansBySession, got %d", len(session1Spans))
+	}
+}
+
+var _ sdktrace.SpanExporter = (*APIServerSpanExporter)(nil)

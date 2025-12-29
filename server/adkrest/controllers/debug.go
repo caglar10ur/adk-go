@@ -60,6 +60,58 @@ func (c *DebugAPIController) TraceDictHandler(rw http.ResponseWriter, req *http.
 	EncodeJSONResponse(eventDict, http.StatusOK, rw)
 }
 
+// SpanInfo represents detailed information about a trace span.
+type SpanInfo struct {
+	Name         string            `json:"name"`
+	SpanID       string            `json:"span_id"`
+	TraceID      string            `json:"trace_id"`
+	StartTime    int64             `json:"start_time"`
+	EndTime      int64             `json:"end_time"`
+	Attributes   map[string]string `json:"attributes"`
+	ParentSpanID *string           `json:"parent_span_id"`
+}
+
+// SessionTraceHandler returns the debug information for the session in form of dictionary.
+func (c *DebugAPIController) SessionTraceHandler(rw http.ResponseWriter, req *http.Request) {
+	params := mux.Vars(req)
+	sessionID := params["session_id"]
+	if sessionID == "" {
+		http.Error(rw, "session_id parameter is required", http.StatusBadRequest)
+		return
+	}
+	spans := c.spansExporter.ExportSpansBySession(sessionID)
+	if len(spans) == 0 {
+		http.Error(rw, fmt.Sprintf("session not found: %s", sessionID), http.StatusNotFound)
+		return
+	}
+	spanInfos := make([]SpanInfo, 0, len(spans))
+	for _, span := range spans {
+		attributes := make(map[string]string)
+		for _, attribute := range span.Attributes() {
+			key := string(attribute.Key)
+			attributes[key] = attribute.Value.AsString()
+		}
+
+		var parentSpanID *string
+		if span.Parent().HasSpanID() {
+			psid := span.Parent().SpanID().String()
+			parentSpanID = &psid
+		}
+
+		spanInfos = append(spanInfos, SpanInfo{
+			Name:         span.Name(),
+			SpanID:       span.SpanContext().SpanID().String(),
+			TraceID:      span.SpanContext().TraceID().String(),
+			StartTime:    span.StartTime().UnixNano(),
+			EndTime:      span.EndTime().UnixNano(),
+			Attributes:   attributes,
+			ParentSpanID: parentSpanID,
+		})
+
+	}
+	EncodeJSONResponse(spanInfos, http.StatusOK, rw)
+}
+
 // EventGraphHandler returns the debug information for the session and session events in form of graph.
 func (c *DebugAPIController) EventGraphHandler(rw http.ResponseWriter, req *http.Request) {
 	vars := mux.Vars(req)

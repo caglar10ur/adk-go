@@ -23,6 +23,7 @@ import (
 
 	"google.golang.org/adk/artifact"
 	agentinternal "google.golang.org/adk/internal/agent"
+	"google.golang.org/adk/internal/telemetry"
 	"google.golang.org/adk/memory"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
@@ -156,20 +157,13 @@ func (a *agent) SubAgents() []Agent {
 
 func (a *agent) Run(ctx InvocationContext) iter.Seq2[*session.Event, error] {
 	return func(yield func(*session.Event, error) bool) {
-		// TODO: verify&update the setup here. Should we branch etc.
-		ctx := &invocationContext{
-			Context:   ctx,
-			agent:     a,
-			artifacts: ctx.Artifacts(),
-			memory:    ctx.Memory(),
-			session:   ctx.Session(),
+		sctx, span := telemetry.StartTrace(ctx, "invoke_agent "+a.Name())
+		defer span.End()
 
-			invocationID:  ctx.InvocationID(),
-			branch:        ctx.Branch(),
-			userContent:   ctx.UserContent(),
-			runConfig:     ctx.RunConfig(),
-			endInvocation: ctx.Ended(),
-		}
+		// TODO: verify&update the setup here. Should we branch etc.
+		ctx = NewInvocationContextWithAgent(sctx, a, ctx)
+
+		telemetry.TraceAgentInvocation(span, a.Name(), a.Description(), ctx.Session().ID())
 
 		event, err := runBeforeAgentCallbacks(ctx)
 		if event != nil || err != nil {
@@ -381,16 +375,16 @@ func (c *callbackContextState) All() iter.Seq2[string, any] {
 type invocationContext struct {
 	context.Context
 
-	agent     Agent
-	artifacts Artifacts
-	memory    Memory
-	session   session.Session
+	agent             Agent
+	InvocationContext InvocationContext
+}
 
-	invocationID  string
-	branch        string
-	userContent   *genai.Content
-	runConfig     *RunConfig
-	endInvocation bool
+func NewInvocationContextWithAgent(ctx context.Context, agent Agent, ictx InvocationContext) *invocationContext {
+	return &invocationContext{
+		Context:           ctx,
+		agent:             agent,
+		InvocationContext: ictx,
+	}
 }
 
 func (c *invocationContext) Agent() Agent {
@@ -398,37 +392,37 @@ func (c *invocationContext) Agent() Agent {
 }
 
 func (c *invocationContext) Artifacts() Artifacts {
-	return c.artifacts
+	return c.InvocationContext.Artifacts()
 }
 
 func (c *invocationContext) Memory() Memory {
-	return c.memory
+	return c.InvocationContext.Memory()
 }
 
 func (c *invocationContext) Session() session.Session {
-	return c.session
+	return c.InvocationContext.Session()
 }
 
 func (c *invocationContext) InvocationID() string {
-	return c.invocationID
+	return c.InvocationContext.InvocationID()
 }
 
 func (c *invocationContext) Branch() string {
-	return c.branch
+	return c.InvocationContext.Branch()
 }
 
 func (c *invocationContext) UserContent() *genai.Content {
-	return c.userContent
+	return c.InvocationContext.UserContent()
 }
 
 func (c *invocationContext) RunConfig() *RunConfig {
-	return c.runConfig
+	return c.InvocationContext.RunConfig()
 }
 
 func (c *invocationContext) EndInvocation() {
-	c.endInvocation = true
+	c.InvocationContext.EndInvocation()
 }
 
 func (c *invocationContext) Ended() bool {
-	return c.endInvocation
+	return c.InvocationContext.Ended()
 }

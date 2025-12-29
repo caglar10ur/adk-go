@@ -32,6 +32,7 @@ import (
 	"google.golang.org/adk/internal/llminternal"
 	imemory "google.golang.org/adk/internal/memory"
 	"google.golang.org/adk/internal/sessioninternal"
+	"google.golang.org/adk/internal/telemetry"
 	"google.golang.org/adk/memory"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
@@ -96,6 +97,9 @@ func (r *Runner) Run(ctx context.Context, userID, sessionID string, msg *genai.C
 	//   see adk-python/src/google/adk/runners.py Runner._new_invocation_context.
 	// TODO: setup tracer.
 	return func(yield func(*session.Event, error) bool) {
+		ctx, span := telemetry.StartTrace(ctx, "invocation")
+		defer span.End()
+
 		resp, err := r.sessionService.Get(ctx, &session.GetRequest{
 			AppName:   r.appName,
 			UserID:    userID,
@@ -139,7 +143,10 @@ func (r *Runner) Run(ctx context.Context, userID, sessionID string, msg *genai.C
 			}
 		}
 
-		ctx := icontext.NewInvocationContext(ctx, icontext.InvocationContextParams{
+		ctx, span = telemetry.StartTrace(ctx, "send_data")
+		defer span.End()
+
+		ictx := icontext.NewInvocationContext(ctx, icontext.InvocationContextParams{
 			Artifacts:   artifacts,
 			Memory:      memoryImpl,
 			Session:     sessioninternal.NewMutableSession(r.sessionService, session),
@@ -148,12 +155,16 @@ func (r *Runner) Run(ctx context.Context, userID, sessionID string, msg *genai.C
 			RunConfig:   &cfg,
 		})
 
-		if err := r.appendMessageToSession(ctx, session, msg, cfg.SaveInputBlobsAsArtifacts); err != nil {
+		event, err := r.appendMessageToSession(ictx, session, msg, cfg.SaveInputBlobsAsArtifacts)
+		if err != nil {
 			yield(nil, err)
 			return
 		}
+		if event != nil {
+			telemetry.TraceSendData(span, event.InvocationID, event.ID, []*genai.Content{msg})
+		}
 
-		for event, err := range agentToRun.Run(ctx) {
+		for event, err := range agentToRun.Run(ictx) {
 			if err != nil {
 				if !yield(event, err) {
 					return
@@ -163,7 +174,7 @@ func (r *Runner) Run(ctx context.Context, userID, sessionID string, msg *genai.C
 
 			// only commit non-partial event to a session service
 			if !event.LLMResponse.Partial {
-				if err := r.sessionService.AppendEvent(ctx, session, event); err != nil {
+				if err := r.sessionService.AppendEvent(ictx, session, event); err != nil {
 					yield(nil, fmt.Errorf("failed to add event to session: %w", err))
 					return
 				}
@@ -176,9 +187,9 @@ func (r *Runner) Run(ctx context.Context, userID, sessionID string, msg *genai.C
 	}
 }
 
-func (r *Runner) appendMessageToSession(ctx agent.InvocationContext, storedSession session.Session, msg *genai.Content, saveInputBlobsAsArtifacts bool) error {
+func (r *Runner) appendMessageToSession(ctx agent.InvocationContext, storedSession session.Session, msg *genai.Content, saveInputBlobsAsArtifacts bool) (*session.Event, error) {
 	if msg == nil {
-		return nil
+		return nil, nil
 	}
 
 	artifactsService := ctx.Artifacts()
@@ -189,7 +200,7 @@ func (r *Runner) appendMessageToSession(ctx agent.InvocationContext, storedSessi
 			}
 			fileName := fmt.Sprintf("artifact_%s_%d", ctx.InvocationID(), i)
 			if _, err := artifactsService.Save(ctx, fileName, part); err != nil {
-				return fmt.Errorf("failed to save artifact %s: %w", fileName, err)
+				return nil, fmt.Errorf("failed to save artifact %s: %w", fileName, err)
 			}
 			// Replace the part with a text placeholder
 			msg.Parts[i] = &genai.Part{
@@ -206,9 +217,9 @@ func (r *Runner) appendMessageToSession(ctx agent.InvocationContext, storedSessi
 	}
 
 	if err := r.sessionService.AppendEvent(ctx, storedSession, event); err != nil {
-		return fmt.Errorf("failed to append event to sessionService: %w", err)
+		return nil, fmt.Errorf("failed to append event to sessionService: %w", err)
 	}
-	return nil
+	return event, nil
 }
 
 // findAgentToRun returns the agent that should handle the next request based on
