@@ -29,9 +29,7 @@ const (
 	GoogleLLMVariantGeminiAPI = "GEMINI_API"
 )
 
-var (
-	geminiModelVersionRegex = regexp.MustCompile(`^gemini-(\d+(\.\d+)?)`)
-)
+var geminiModelVersionRegex = regexp.MustCompile(`^gemini-(\d+(\.\d+)?)`)
 
 // GetGoogleLLMVariant returns the Google LLM variant to use.
 // see https://google.github.io/adk-docs/get-started/quickstart/#set-up-the-model
